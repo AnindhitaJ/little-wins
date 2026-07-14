@@ -54,7 +54,7 @@ export function createSettingsController({
     document.getElementById("settingReminderTime").value = String(settings.daily_reminder_time || "20:00").slice(0, 5);
     document.getElementById("settingCelebration").checked = settings.show_celebration;
     document.getElementById("settingSound").checked = settings.enable_sound;
-    document.getElementById("anonymousUserId").textContent = getCurrentUser().id;
+    document.getElementById("anonymousUserId").textContent = "Shared owner";
     renderThemePicker(settings.theme);
     applyTheme(settings.theme);
     scheduleReminder(settings, onSuccess);
@@ -160,7 +160,7 @@ export function createSettingsController({
     try {
       const parsed = JSON.parse(await file.text());
       const backup = parsed.data || parsed;
-      const confirmed = window.confirm("Restore this backup? Current Little Wins data for this anonymous account will be replaced.");
+      const confirmed = window.confirm("Restore this backup? The shared Little Wins data on every device will be replaced.");
       if (!confirmed) return;
       await restoreBackupData(backup);
       onSuccess("Backup restored. Refreshing your data…");
@@ -181,7 +181,7 @@ export function createSettingsController({
       const content = JSON.stringify({
         app: "Little Wins",
         exported_at: new Date().toISOString(),
-        user_id: getCurrentUser().id,
+        profile_id: getCurrentUser().id,
         data
       }, null, 2);
       const blob = new Blob([content], { type: "application/json" });

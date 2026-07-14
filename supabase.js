@@ -1,5 +1,7 @@
+const SHARED_PROFILE_ID = "00000000-0000-0000-0000-000000000001";
+
 let client = null;
-let currentUser = null;
+let authUser = null;
 
 export class ConfigurationError extends Error {
   constructor(message) {
@@ -23,8 +25,8 @@ async function resolveConfiguration() {
       }
     }
   } catch (error) {
-    // A plain static server will not have /api/config. The detailed setup error
-    // below tells the user to use config.js instead.
+    // A plain static server will not have /api/config. The setup error below
+    // tells the user to use config.js instead.
     console.info("Runtime config endpoint unavailable:", error.message);
   }
 
@@ -38,9 +40,9 @@ function requireClient() {
   return client;
 }
 
-function requireUser() {
-  if (!currentUser) throw new Error("Anonymous user session is unavailable.");
-  return currentUser;
+function requireAuthUser() {
+  if (!authUser) throw new Error("Anonymous authentication session is unavailable.");
+  return authUser;
 }
 
 export async function initializeDatabase() {
@@ -67,28 +69,35 @@ export async function initializeDatabase() {
     session = data.session;
   }
 
-  currentUser = session?.user || null;
-  if (!currentUser) throw new Error("Anonymous sign-in did not return a user.");
+  authUser = session?.user || null;
+  if (!authUser) throw new Error("Anonymous sign-in did not return a user.");
 
+  // The database maps every authenticated anonymous browser session to one
+  // fixed profile, so all devices read and update the same Little Wins data.
   const { error: profileError } = await client.rpc("ensure_user_profile");
   if (profileError) throw profileError;
 
   client.auth.onAuthStateChange((_event, nextSession) => {
-    currentUser = nextSession?.user || null;
+    authUser = nextSession?.user || null;
   });
 
-  return currentUser;
+  return getCurrentUser();
 }
 
 export function getCurrentUser() {
-  return requireUser();
+  requireAuthUser();
+  return {
+    id: SHARED_PROFILE_ID,
+    auth_id: authUser.id,
+    shared: true
+  };
 }
 
 export async function fetchSettings() {
   const { data, error } = await requireClient()
     .from("settings")
     .select("*")
-    .eq("user_id", requireUser().id)
+    .eq("user_id", SHARED_PROFILE_ID)
     .single();
   if (error) throw error;
   return data;
@@ -98,7 +107,7 @@ export async function updateSettings(changes) {
   const { data, error } = await requireClient()
     .from("settings")
     .update(changes)
-    .eq("user_id", requireUser().id)
+    .eq("user_id", SHARED_PROFILE_ID)
     .select("*")
     .single();
   if (error) throw error;
@@ -109,7 +118,7 @@ export async function fetchTodayLog(localDate) {
   const { data, error } = await requireClient()
     .from("daily_logs")
     .select("*")
-    .eq("user_id", requireUser().id)
+    .eq("user_id", SHARED_PROFILE_ID)
     .eq("log_date", localDate)
     .maybeSingle();
   if (error) throw error;
@@ -117,7 +126,10 @@ export async function fetchTodayLog(localDate) {
 }
 
 export async function submitCheckIn(status, localDate) {
-  const { data, error } = await requireClient().rpc("check_in", { p_status: status, p_log_date: localDate });
+  const { data, error } = await requireClient().rpc("check_in", {
+    p_status: status,
+    p_log_date: localDate
+  });
   if (error) throw error;
   return data;
 }
@@ -126,7 +138,7 @@ export async function fetchLogsBetween(startDate, endDate) {
   const { data, error } = await requireClient()
     .from("daily_logs")
     .select("id, log_date, status, created_at")
-    .eq("user_id", requireUser().id)
+    .eq("user_id", SHARED_PROFILE_ID)
     .gte("log_date", startDate)
     .lte("log_date", endDate)
     .order("log_date", { ascending: true });
@@ -138,7 +150,7 @@ export async function fetchRecentLogs(limit = 45) {
   const { data, error } = await requireClient()
     .from("daily_logs")
     .select("id, log_date, status, created_at")
-    .eq("user_id", requireUser().id)
+    .eq("user_id", SHARED_PROFILE_ID)
     .order("log_date", { ascending: false })
     .limit(limit);
   if (error) throw error;
@@ -149,7 +161,7 @@ export async function fetchRewards(limit = 100) {
   const { data, error } = await requireClient()
     .from("rewards")
     .select("*")
-    .eq("user_id", requireUser().id)
+    .eq("user_id", SHARED_PROFILE_ID)
     .order("earned_date", { ascending: false })
     .order("created_at", { ascending: false })
     .limit(limit);
@@ -161,7 +173,7 @@ export async function fetchAchievements() {
   const { data, error } = await requireClient()
     .from("achievements")
     .select("achievement_key, unlocked_at")
-    .eq("user_id", requireUser().id)
+    .eq("user_id", SHARED_PROFILE_ID)
     .order("unlocked_at", { ascending: true });
   if (error) throw error;
   return data || [];
@@ -171,7 +183,7 @@ export async function fetchWishlist() {
   const { data, error } = await requireClient()
     .from("wishlist")
     .select("*")
-    .eq("user_id", requireUser().id)
+    .eq("user_id", SHARED_PROFILE_ID)
     .order("created_at", { ascending: false });
   if (error) throw error;
   return data || [];
@@ -180,7 +192,7 @@ export async function fetchWishlist() {
 export async function createWishlistItem(item) {
   const { data, error } = await requireClient()
     .from("wishlist")
-    .insert({ ...item, user_id: requireUser().id })
+    .insert({ ...item, user_id: SHARED_PROFILE_ID })
     .select("*")
     .single();
   if (error) throw error;
@@ -192,7 +204,7 @@ export async function updateWishlistItem(id, changes) {
     .from("wishlist")
     .update(changes)
     .eq("id", id)
-    .eq("user_id", requireUser().id)
+    .eq("user_id", SHARED_PROFILE_ID)
     .select("*")
     .single();
   if (error) throw error;
@@ -204,14 +216,16 @@ export async function deleteWishlistItem(id) {
     .from("wishlist")
     .delete()
     .eq("id", id)
-    .eq("user_id", requireUser().id);
+    .eq("user_id", SHARED_PROFILE_ID);
   if (error) throw error;
 }
 
 export async function fetchStatistics() {
   const now = new Date();
   const localDate = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-  const { data, error } = await requireClient().rpc("get_statistics", { p_local_date: localDate });
+  const { data, error } = await requireClient().rpc("get_statistics", {
+    p_local_date: localDate
+  });
   if (error) throw error;
   return data;
 }
@@ -223,7 +237,9 @@ export async function fetchBackupData() {
 }
 
 export async function restoreBackupData(backup) {
-  const { data, error } = await requireClient().rpc("restore_backup_data", { p_backup: backup });
+  const { data, error } = await requireClient().rpc("restore_backup_data", {
+    p_backup: backup
+  });
   if (error) throw error;
   return data;
 }
